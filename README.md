@@ -22,8 +22,3 @@ Während traditionelle Nachrichten oft verzögert berichten, zielt dieser Scrape
 * **APIs:** NewsAPI
 * **Datenbank:** PostgreSQL (oder JSON im frühen Stadium)
 * *(Geplant für NLP: NLTK, spaCy oder Hugging Face Transformers)*
-
-## ⚙️ Setup & Installation
-1. Repository klonen:
-   ```bash
-   git clone [https://github.com/DEIN-USERNAME/DEIN-REPO-NAME.git](https://github.com/DEIN-USERNAME/DEIN-REPO-NAME.git)
