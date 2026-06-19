@@ -1,2 +1,3 @@
 Scripts/credentials.conf
 .venv
+Scripts/database/armoredeye_newspaper.duckdb
