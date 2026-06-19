@@ -1,7 +1,9 @@
 import configparser
 import json
+import os
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 try:
     import trafilatura
@@ -18,13 +20,41 @@ except ModuleNotFoundError as e:
 ### inkl. vollständigem Artikeltext (nicht nur NewsAPI-Snippet)
 
 
-def get_apikey(path="credentials.conf"):
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+DEFAULT_OUTPUT_PATH = BASE_DIR / "getnews_json" / "battlefield_changes.json"
+
+
+def get_apikey(path=None):
+    env_apikey = os.getenv("NEWSAPI_KEY")
+    if env_apikey:
+        return env_apikey.strip()
+
+    candidates = [Path(path)] if path else [
+        BASE_DIR / "credentials.conf",
+        PROJECT_ROOT / "credentials.conf",
+    ]
+
     parser = configparser.ConfigParser()
-    if not parser.read(path):
-        raise FileNotFoundError(f"Konfigurationsdatei nicht gefunden: {path}")
+
+    config_path = None
+    for candidate in candidates:
+        if candidate.exists():
+            config_path = candidate
+            break
+
+    if config_path is None:
+        searched = ", ".join(str(candidate) for candidate in candidates)
+        raise FileNotFoundError(
+            "Konfigurationsdatei nicht gefunden. "
+            f"Gesucht wurde hier: {searched}. "
+            "Alternativ kannst du NEWSAPI_KEY als Umgebungsvariable setzen."
+        )
+
+    parser.read(config_path)
     apikey = parser.get("newsapi", "apikey", fallback="").strip()
     if not apikey:
-        raise ValueError("Kein API-Key in der Sektion [newsapi] gefunden.")
+        raise ValueError(f"Kein API-Key in der Sektion [newsapi] gefunden: {config_path}")
     return apikey
 
 
@@ -81,9 +111,58 @@ def enrich_articles_with_full_text(articles, delay=1.0):
     return articles
 
 
-def save_articles(data, filename="battlefield_changes.json"):
-    with open(filename, "w", encoding="utf-8") as file:
+def load_existing_articles(filename=DEFAULT_OUTPUT_PATH):
+    path = Path(filename)
+    if not path.exists():
+        return {"status": "ok", "totalResults": 0, "articles": []}
+
+    with open(path, encoding="utf-8") as file:
+        return json.load(file)
+
+
+def merge_new_articles(existing_data, fetched_data):
+    existing_articles = existing_data.get("articles", [])
+    fetched_articles = fetched_data.get("articles", [])
+    existing_urls = {article.get("url") for article in existing_articles if article.get("url")}
+    new_articles = [
+        article for article in fetched_articles
+        if article.get("url") and article.get("url") not in existing_urls
+    ]
+
+    merged_articles = existing_articles + new_articles
+    merged_data = {
+        **existing_data,
+        "status": fetched_data.get("status", existing_data.get("status", "ok")),
+        "totalResults": len(merged_articles),
+        "articles": merged_articles,
+    }
+
+    return merged_data, new_articles
+
+
+def save_articles(data, filename=DEFAULT_OUTPUT_PATH):
+    path = Path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4, ensure_ascii=False)
+
+
+def load_database(json_path=DEFAULT_OUTPUT_PATH):
+    try:
+        from database.database import load_articles_from_json
+    except ModuleNotFoundError:
+        print("Datenbank-Modul nicht gefunden. JSON wurde trotzdem gespeichert.")
+        return
+
+    try:
+        imported, totals = load_articles_from_json(json_path)
+    except Exception as e:
+        print(f"DuckDB konnte nicht aktualisiert werden: {e}")
+        return
+
+    print(f"DuckDB aktualisiert: {imported} Artikel aus JSON gelesen.")
+    print(f"Artikel insgesamt in DuckDB: {totals['articles']}")
 
 
 def main():
@@ -125,12 +204,19 @@ def main():
         print("Keine Artikel zum Anreichern gefunden.")
         return
 
-    print("Lade vollständige Artikeltexte nach (kann etwas dauern)...")
-    articles = enrich_articles_with_full_text(articles)
-    all_articles['articles'] = articles
+    existing_data = load_existing_articles()
+    all_articles, new_articles = merge_new_articles(existing_data, all_articles)
+
+    if new_articles:
+        print(f"Neue Artikel gefunden: {len(new_articles)}")
+        print("Lade vollständige Texte für neue Artikel nach (kann etwas dauern)...")
+        enrich_articles_with_full_text(new_articles)
+    else:
+        print("Keine neuen Artikel gefunden. JSON und Datenbank bleiben ohne Duplikate.")
 
     save_articles(all_articles)
-    print(f"Fertig. {len(articles)} Artikel inkl. Volltext gespeichert in 'battlefield_changes.json'.")
+    load_database()
+    print(f"Fertig. {len(all_articles['articles'])} Artikel gespeichert in '{DEFAULT_OUTPUT_PATH}'.")
 
 
 if __name__ == "__main__":
